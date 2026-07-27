@@ -13,7 +13,7 @@ from sensor_websocket import (
     websocket_clients,
 )
 
-# Mapping from key name to linear/angular velocity 
+# --- Mapping from key name to linear/angular velocity ---
 KEY_TO_TWIST = {
     "w": (0.3, 0.0),    # forward
     "s": (-0.3, 0.0),   # backward
@@ -27,15 +27,13 @@ class RosBridgeNode(Node):
     def __init__(self):
         super().__init__('react_bridge_node')
 
-        # Subscriber: battery state -> push to WebSocket clients 
-        self.create_subscription(
-            BatteryState,
-            '/battery_state',
-            self.battery_callback,
-            10
-        )
+        # --- Subscriber: battery state -> push to WebSocket clients ---
+        self.create_subscription(BatteryState, '/battery_state', self.battery_callback, 10)
+        self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        self.create_subscription(HazardDetectionVector, '/hazard_detection', self.hazard_callback, 10)
+        self.create_subscription(DockStatus, '/dock_status', self.dock_callback, 10)
 
-        # Publisher: cmd_vel, driven by keyboard commands from React 
+        # --- Publisher: cmd_vel, driven by keyboard commands from React ---
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
     def battery_callback(self, msg: BatteryState):
@@ -44,6 +42,27 @@ class RosBridgeNode(Node):
             enabled=True,
             value=f"{round(msg.percentage * 100, 1)}%"
         )
+
+    def odom_callback(self, msg: Odometry):
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        update_sensor_state(
+            "/odom",
+            enabled=True,
+            value=f"x={x:.2f}, y={y:.2f}"
+        )
+
+    def hazard_callback(self, msg: HazardDetectionVector):
+        if len(msg.detections) == 0:
+            value = "None"
+        else:
+            types = [d.type for d in msg.detections]
+            value = f"{len(msg.detections)} hazard(s): {types}"
+        update_sensor_state("/hazard_detection", enabled=True, value=value)
+
+    def dock_callback(self, msg: DockStatus):
+        value = "Docked" if msg.is_docked else "Free"
+        update_sensor_state("/dock_status", enabled=True, value=value)
 
     def publish_cmd_vel(self, key: str):
         linear, angular = KEY_TO_TWIST.get(key, (0.0, 0.0))
