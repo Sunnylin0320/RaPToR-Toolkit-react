@@ -36,7 +36,7 @@ def get_all_actions():
         list: A list of all actions with their types
     """
     result = subprocess.run("ros2 action list -t", shell=True,
-                            capture_output=True, text=True, check=True)
+                            capture_output=True, text=True, check=False)
 
     # Check if the command was successful
     if result.returncode != 0:
