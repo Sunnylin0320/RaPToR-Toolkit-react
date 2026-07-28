@@ -39,13 +39,16 @@ from sensor_websocket import (
 
 # --- Mapping from key name to linear/angular velocity ---
 KEY_TO_TWIST = {
-    "w": (0.3, 0.0),    # forward
-    "s": (-0.3, 0.0),   # backward
-    "a": (0.0, 0.5),    # turn left (spin in place)
-    "d": (0.0, -0.5),   # turn right
-    "stop": (0.0, 0.0), # explicit stop
+    "w": (0.3, 0.0),     # forward
+    "s": (-0.3, 0.0),    # backward
+    "a": (0.0, 0.5),     # turn left (spin in place)
+    "d": (0.0, -0.5),    # turn right
+    "q": (0.3, 0.5),     # forward + left
+    "e": (0.3, -0.5),    # forward + right
+    "z": (-0.3, 0.5),    # backward + left
+    "c": (-0.3, -0.5),   # backward + right
+    "stop": (0.0, 0.0),  # explicit stop
 }
-
 
 class RosBridgeNode(Node):
     def __init__(self):
