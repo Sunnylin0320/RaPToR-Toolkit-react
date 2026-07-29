@@ -1,3 +1,6 @@
+"""
+Bridge script: connects ROS 2 (Gazebo simulation) <-> WebSocket <-> React frontend
+"""
 import asyncio
 import json
 import threading
@@ -5,6 +8,7 @@ import threading
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.action import ActionClient
 from sensor_msgs.msg import BatteryState, JointState
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist, PointStamped, PoseStamped, PoseWithCovarianceStamped
@@ -29,6 +33,16 @@ from irobot_create_msgs.msg import (
     WheelTicks,
     WheelVels,
 )
+from irobot_create_msgs.action import (
+    Dock,
+    Undock,
+    RotateAngle,
+    DriveDistance,
+    DriveArc,
+    NavigateToPosition,
+    AudioNoteSequence,
+    LedAnimation,
+)
 
 from sensor_websocket import (
     start_websocket_server,
@@ -36,19 +50,19 @@ from sensor_websocket import (
     websocket_clients,
 )
 
-
-# --- Mapping from key name to linear/angular velocity ---
 KEY_TO_TWIST = {
-    "w": (0.3, 0.0),     # forward
-    "s": (-0.3, 0.0),    # backward
-    "a": (0.0, 0.5),     # turn left (spin in place)
-    "d": (0.0, -0.5),    # turn right
-    "q": (0.3, 0.5),     # forward + left
-    "e": (0.3, -0.5),    # forward + right
-    "z": (-0.3, 0.5),    # backward + left
-    "c": (-0.3, -0.5),   # backward + right
-    "stop": (0.0, 0.0),  # explicit stop
+    "w": (0.3, 0.0),
+    "x": (-0.3, 0.0),
+    "a": (0.0, 0.5),
+    "d": (0.0, -0.5),
+    "q": (0.3, 0.5),
+    "e": (0.3, -0.5),
+    "z": (-0.3, 0.5),
+    "c": (-0.3, -0.5),
+    "s": (0.0, 0.0),
+    "stop": (0.0, 0.0),
 }
+
 
 class RosBridgeNode(Node):
     def __init__(self):
@@ -104,21 +118,25 @@ class RosBridgeNode(Node):
 
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
+        # --- Action clients ---
+        self.dock_client = ActionClient(self, Dock, '/dock')
+        self.undock_client = ActionClient(self, Undock, '/undock')
+        self.rotate_angle_client = ActionClient(self, RotateAngle, '/rotate_angle')
+        self.drive_distance_client = ActionClient(self, DriveDistance, '/drive_distance')
+        self.drive_arc_client = ActionClient(self, DriveArc, '/drive_arc')
+        self.navigate_client = ActionClient(self, NavigateToPosition, '/navigate_to_position')
+        self.audio_client = ActionClient(self, AudioNoteSequence, '/audio_note_sequence')
+        self.led_client = ActionClient(self, LedAnimation, '/led_animation')
+
+    # --- Create 3 robot sensors / status ---
+
     def battery_callback(self, msg: BatteryState):
-        update_sensor_state(
-            "/battery_state",
-            enabled=True,
-            value=f"{round(msg.percentage * 100, 1)}%"
-        )
+        update_sensor_state("/battery_state", enabled=True, value=f"{round(msg.percentage * 100, 1)}%")
 
     def odom_callback(self, msg: Odometry):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
-        update_sensor_state(
-            "/odom",
-            enabled=True,
-            value=f"x={x:.2f}, y={y:.2f}"
-        )
+        update_sensor_state("/odom", enabled=True, value=f"x={x:.2f}, y={y:.2f}")
 
     def hazard_callback(self, msg: HazardDetectionVector):
         if len(msg.detections) == 0:
@@ -133,7 +151,6 @@ class RosBridgeNode(Node):
         update_sensor_state("/dock_status", enabled=True, value=value)
 
     def interface_buttons_callback(self, msg: InterfaceButtons):
-        # NOTE: verify field names with `ros2 interface show irobot_create_msgs/msg/InterfaceButtons`
         pressed = []
         if msg.button_1.is_pressed:
             pressed.append("button_1")
@@ -145,12 +162,10 @@ class RosBridgeNode(Node):
         update_sensor_state("/interface_buttons", enabled=True, value=value)
 
     def ir_intensity_callback(self, msg: IrIntensityVector):
-        # NOTE: verify field names with `ros2 interface show irobot_create_msgs/msg/IrIntensityVector`
         values = [r.value for r in msg.readings]
         update_sensor_state("/ir_intensity", enabled=True, value=str(values))
 
     def ir_opcode_callback(self, msg: IrOpcode):
-        # NOTE: verify field names with `ros2 interface show irobot_create_msgs/msg/IrOpcode`
         update_sensor_state("/ir_opcode", enabled=True, value=f"opcode={msg.opcode}, sensor={msg.sensor}")
 
     def kidnap_callback(self, msg: KidnapStatus):
@@ -158,7 +173,6 @@ class RosBridgeNode(Node):
         update_sensor_state("/kidnap_status", enabled=True, value=value)
 
     def mouse_callback(self, msg: Mouse):
-        # NOTE: verify field names with `ros2 interface show irobot_create_msgs/msg/Mouse`
         update_sensor_state(
             "/mouse", enabled=True,
             value=f"x={msg.integrated_x:.2f}, y={msg.integrated_y:.2f}"
@@ -173,7 +187,6 @@ class RosBridgeNode(Node):
         update_sensor_state("/stop_status", enabled=True, value=value)
 
     def wheel_status_callback(self, msg: WheelStatus):
-        # NOTE: verify field names with `ros2 interface show irobot_create_msgs/msg/WheelStatus`
         value = f"enabled={msg.wheels_enabled}, current_L={msg.current_ma_left}, current_R={msg.current_ma_right}"
         update_sensor_state("/wheel_status", enabled=True, value=value)
 
@@ -240,7 +253,6 @@ class RosBridgeNode(Node):
         update_sensor_state("/joint_states", enabled=True, value=f"{len(msg.name)} joint(s): {list(msg.name)}")
 
     def dynamic_joint_states_callback(self, msg: DynamicJointState):
-        # NOTE: verify field names with `ros2 interface show control_msgs/msg/DynamicJointState`
         update_sensor_state("/dynamic_joint_states", enabled=True, value=f"{len(msg.joint_names)} joint(s)")
 
     # --- ROS 2 system-level topics ---
@@ -258,13 +270,12 @@ class RosBridgeNode(Node):
         update_sensor_state("/rosout", enabled=True, value=f"[{msg.name}] {msg.msg}")
 
     def jsb_transition_callback(self, msg: TransitionEvent):
-        # NOTE: verify field names with `ros2 interface show lifecycle_msgs/msg/TransitionEvent`
         update_sensor_state("/joint_state_broadcaster/transition_event", enabled=True, value=str(msg.transition.label))
 
     def diffdrive_transition_callback(self, msg: TransitionEvent):
         update_sensor_state("/diffdrive_controller/transition_event", enabled=True, value=str(msg.transition.label))
 
-     # --- Movement control ---
+    # --- Movement control ---
 
     def publish_cmd_vel(self, key: str):
         linear, angular = KEY_TO_TWIST.get(key, (0.0, 0.0))
@@ -274,24 +285,90 @@ class RosBridgeNode(Node):
         self.cmd_vel_pub.publish(twist)
         self.get_logger().info(f"Published cmd_vel for key '{key}': linear={linear}, angular={angular}")
 
+    # --- Action execution ---
 
-# --- WebSocket receive handling: needs to hook into sensor_websocket's connections ---
-# sensor_websocket.py's handler only sends data out; we patch in a receive loop here.
+    def send_action(self, action_name: str, params: dict):
+        """
+        Send a goal to the specified action server.
+        params is a dict already parsed from the JSON sent by React,
+        with keys matching the goal message fields.
+        """
+        action_map = {
+            "dock": (self.dock_client, Dock.Goal),
+            "undock": (self.undock_client, Undock.Goal),
+            "rotate_angle": (self.rotate_angle_client, RotateAngle.Goal),
+            "drive_distance": (self.drive_distance_client, DriveDistance.Goal),
+            "drive_arc": (self.drive_arc_client, DriveArc.Goal),
+            "navigate_to_position": (self.navigate_client, NavigateToPosition.Goal),
+            "audio_note_sequence": (self.audio_client, AudioNoteSequence.Goal),
+            "led_animation": (self.led_client, LedAnimation.Goal),
+        }
+
+        if action_name not in action_map:
+            self.get_logger().warn(f"Unknown action: {action_name}")
+            return
+
+        client, goal_type = action_map[action_name]
+        goal_msg = goal_type()
+
+        for key, value in params.items():
+            if hasattr(goal_msg, key):
+                setattr(goal_msg, key, value)
+
+        if not client.wait_for_server(timeout_sec=2.0):
+            self.get_logger().error(f"Action server for '{action_name}' not available!")
+            return
+
+        self.get_logger().info(f"Sending action '{action_name}' with params: {params}")
+        future = client.send_goal_async(goal_msg)
+        future.add_done_callback(
+            lambda f: self._goal_response_callback(f, action_name)
+        )
+
+    def _goal_response_callback(self, future, action_name):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().warn(f"Action '{action_name}' was REJECTED by the action server")
+            return
+
+        self.get_logger().info(f"Action '{action_name}' was ACCEPTED, waiting for result...")
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(
+            lambda f: self._goal_result_callback(f, action_name)
+        )
+
+    def _goal_result_callback(self, future, action_name):
+        result = future.result().result
+        status = future.result().status
+        self.get_logger().info(f"Action '{action_name}' finished with status={status}, result={result}")
+
+
 ros_node = None
 
 
 async def handle_incoming_messages(websocket):
     """
-    Listen for incoming messages (key presses) from a connected React client
-    and forward them to the ROS 2 node to publish cmd_vel.
+    Listen for incoming messages from a connected React client.
+    Two message shapes are supported:
+      - {"key": "w"}                          -> movement command
+      - {"action": "dock", "params": {...}}    -> action command
     """
     try:
         async for message in websocket:
             try:
                 data = json.loads(message)
-                key = data.get("key")
-                if key and ros_node is not None:
-                    ros_node.publish_cmd_vel(key)
+
+                if "key" in data:
+                    key = data.get("key")
+                    if key and ros_node is not None:
+                        ros_node.publish_cmd_vel(key)
+
+                elif "action" in data:
+                    action_name = data.get("action")
+                    params = data.get("params", {})
+                    if action_name and ros_node is not None:
+                        ros_node.send_action(action_name, params)
+
             except json.JSONDecodeError:
                 print(f"Received non-JSON message: {message}")
     except Exception as e:
@@ -299,7 +376,6 @@ async def handle_incoming_messages(websocket):
 
 
 def start_ros_spin_thread(node):
-    """Run rclpy.spin in a background thread so it doesn't block asyncio."""
     def spin():
         rclpy.spin(node)
     threading.Thread(target=spin, daemon=True).start()
@@ -312,12 +388,8 @@ def main():
     ros_node = RosBridgeNode()
     start_ros_spin_thread(ros_node)
 
-    # Start the existing sensor WebSocket server (outgoing data: sensor values)
     start_websocket_server(host="0.0.0.0", port=6789)
 
-    # NOTE: sensor_websocket.py's handler currently only sends data.
-    # To receive incoming key press messages, we start a second, separate
-    # WebSocket server on a different port dedicated to control commands.
     async def control_handler(websocket):
         print(f"Control client connected: {websocket.remote_address}")
         await handle_incoming_messages(websocket)
