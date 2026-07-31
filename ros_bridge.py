@@ -4,6 +4,7 @@ Bridge script: connects ROS 2 (Gazebo simulation) <-> WebSocket <-> React fronte
 import asyncio
 import json
 import threading
+import subprocess
 
 import rclpy
 from rclpy.node import Node
@@ -357,6 +358,7 @@ async def handle_incoming_messages(websocket):
     Two message shapes are supported:
       - {"key": "w"}                          -> movement command
       - {"action": "dock", "params": {...}}    -> action command
+      - {"command": "ros2 topic list"}         -> execute a shell command
     """
     try:
         async for message in websocket:
@@ -374,10 +376,61 @@ async def handle_incoming_messages(websocket):
                     if action_name and ros_node is not None:
                         ros_node.send_action(action_name, params)
 
+                elif "command" in data:
+                    command = data.get("command")
+                    if command:
+                        asyncio.create_task(execute_terminal_command(websocket, command))
+
             except json.JSONDecodeError:
                 print(f"Received non-JSON message: {message}")
     except Exception as e:
         print(f"Incoming message handler stopped: {e}")
+
+async def execute_terminal_command(websocket, command: str):
+    """
+    Execute a shell command, matching the original Tkinter terminal.py
+    behavior: runs the raw command via the shell, streams stdout and
+    stderr back to the client as they arrive, tagging stderr lines as
+    errors so the frontend can style them differently.
+
+    Mirrors terminal.py's use of subprocess.Popen(shell=True, ...).
+    """
+    if command.strip().lower() == "clear":
+        await websocket.send(json.dumps({"type": "terminal_clear"}))
+        return
+
+    process = subprocess.Popen(
+        command,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    loop = asyncio.get_event_loop()
+
+    def read_stream(stream, is_error):
+        for line in iter(stream.readline, ""):
+            asyncio.run_coroutine_threadsafe(
+                websocket.send(json.dumps({
+                    "type": "terminal_output",
+                    "line": line,
+                    "is_error": is_error,
+                })),
+                loop
+            )
+        stream.close()
+
+    # Read stdout and stderr in separate threads, same reasoning as
+    # terminal.py: don't block the main event loop while the command runs.
+    stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, False))
+    stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, True))
+    stdout_thread.start()
+    stderr_thread.start()
+
+    await loop.run_in_executor(None, process.wait)
+    stdout_thread.join()
+    stderr_thread.join()
 
 
 def start_ros_spin_thread(node):
