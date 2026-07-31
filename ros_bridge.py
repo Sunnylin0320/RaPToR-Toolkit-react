@@ -9,6 +9,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rclpy.action import ActionClient
+from rosidl_runtime_py.set_message import set_message_fields
 from sensor_msgs.msg import BatteryState, JointState
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist, PointStamped, PoseStamped, PoseWithCovarianceStamped
@@ -288,10 +289,12 @@ class RosBridgeNode(Node):
     # --- Action execution ---
 
     def send_action(self, action_name: str, params: dict):
+        self.get_logger().info(">>> USING set_message_fields VERSION <<<")
         """
         Send a goal to the specified action server.
-        params is a dict already parsed from the JSON sent by React,
-        with keys matching the goal message fields.
+        params is a dict already parsed from the JSON sent by React.
+        Uses rosidl_runtime_py to correctly populate nested message fields
+        (e.g. navigate_to_position's goal_pose, which must be a PoseStamped).
         """
         action_map = {
             "dock": (self.dock_client, Dock.Goal),
@@ -311,9 +314,11 @@ class RosBridgeNode(Node):
         client, goal_type = action_map[action_name]
         goal_msg = goal_type()
 
-        for key, value in params.items():
-            if hasattr(goal_msg, key):
-                setattr(goal_msg, key, value)
+        try:
+            set_message_fields(goal_msg, params)
+        except Exception as e:
+            self.get_logger().error(f"Failed to set fields for action '{action_name}': {e}")
+            return
 
         if not client.wait_for_server(timeout_sec=2.0):
             self.get_logger().error(f"Action server for '{action_name}' not available!")
