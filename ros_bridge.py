@@ -5,6 +5,7 @@ import asyncio
 import json
 import threading
 import subprocess
+import os
 
 import rclpy
 from rclpy.node import Node
@@ -348,7 +349,58 @@ class RosBridgeNode(Node):
         status = future.result().status
         self.get_logger().info(f"Action '{action_name}' finished with status={status}, result={result}")
 
+RECORDINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings.json")
 
+
+def load_recordings():
+    if not os.path.exists(RECORDINGS_FILE):
+        return {}
+    with open(RECORDINGS_FILE, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+
+def save_recordings(recordings):
+    with open(RECORDINGS_FILE, "w") as f:
+        json.dump(recordings, f, indent=2)
+
+
+async def handle_recording_action(websocket, data, node):
+    action = data.get("recording_action")
+    recordings = load_recordings()
+
+    if action == "list":
+        await websocket.send(json.dumps({"type": "recordings_list", "recordings": recordings}))
+
+    elif action == "save":
+        name = data.get("name")
+        sequence = data.get("sequence", [])
+        recordings[name] = sequence
+        save_recordings(recordings)
+        await websocket.send(json.dumps({"type": "recordings_list", "recordings": recordings}))
+
+    elif action == "delete":
+        name = data.get("name")
+        if name in recordings:
+            del recordings[name]
+            save_recordings(recordings)
+        await websocket.send(json.dumps({"type": "recordings_list", "recordings": recordings}))
+
+    elif action == "play":
+        name = data.get("name")
+        if name not in recordings:
+            return
+        sequence = recordings[name]
+        node.get_logger().info(f"Playing recording '{name}' ({len(sequence)} steps)")
+
+        for key, duration in sequence:
+            node.publish_cmd_vel(key)
+            await asyncio.sleep(duration)
+
+        node.publish_cmd_vel("stop")
+        node.get_logger().info(f"Finished playing recording '{name}'")
 ros_node = None
 
 
@@ -380,6 +432,8 @@ async def handle_incoming_messages(websocket):
                     command = data.get("command")
                     if command:
                         asyncio.create_task(execute_terminal_command(websocket, command))
+                elif "recording_action" in data:
+                    await handle_recording_action(websocket, data, ros_node)
 
             except json.JSONDecodeError:
                 print(f"Received non-JSON message: {message}")
