@@ -1,17 +1,17 @@
 """
 Bridge script: connects ROS 2 (Gazebo simulation) <-> WebSocket <-> React frontend
 """
-import asyncio
+import asyncio # Enables handling many things concurrently
 import json
-import threading
-import subprocess
-import os
+import threading # Runs blocking work in the background
+import subprocess # Executes real shell commands for the Terminal panel
+import os # File path handling for recordings.json
 
-import rclpy
+import rclpy 
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from rclpy.action import ActionClient
-from rosidl_runtime_py.set_message import set_message_fields
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy # Subscription reliability rules
+from rclpy.action import ActionClient 
+from rosidl_runtime_py.set_message import set_message_fields # nested ROS 2 message fields
 from sensor_msgs.msg import BatteryState, JointState
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist, PointStamped, PoseStamped, PoseWithCovarianceStamped
@@ -35,6 +35,8 @@ from irobot_create_msgs.msg import (
     WheelStatus,
     WheelTicks,
     WheelVels,
+    AudioNoteVector,
+    LightringLeds,
 )
 from irobot_create_msgs.action import (
     Dock,
@@ -53,16 +55,17 @@ from sensor_websocket import (
     websocket_clients,
 )
 
+# Maps a keyboard key to (linear velocity, angular velocity).
 KEY_TO_TWIST = {
-    "w": (0.3, 0.0),
-    "x": (-0.3, 0.0),
-    "a": (0.0, 0.5),
-    "d": (0.0, -0.5),
-    "q": (0.3, 0.5),
-    "e": (0.3, -0.5),
-    "z": (-0.3, 0.5),
-    "c": (-0.3, -0.5),
-    "s": (0.0, 0.0),
+    "w": (1.0, 0.0),
+    "s": (-1.0, 0.0),
+    "a": (0.0, 1.0),
+    "d": (0.0, -1.0),
+    "q": (0.5, 1.0),
+    "e": (0.5, -1.0),
+    "z": (-0.5, -1.0),
+    "c": (-0.5, 1.0),
+    "x": (0.0, 0.0),
     "stop": (0.0, 0.0),
 }
 
@@ -92,6 +95,9 @@ class RosBridgeNode(Node):
         self.create_subscription(WheelStatus, '/wheel_status', self.wheel_status_callback, 10)
         self.create_subscription(WheelTicks, '/wheel_ticks', self.wheel_ticks_callback, 10)
         self.create_subscription(WheelVels, '/wheel_vels', self.wheel_vels_callback, 10)
+        self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
+        self.create_subscription(AudioNoteVector, '/cmd_audio', self.cmd_audio_callback, sensor_qos)
+        self.create_subscription(LightringLeds, '/cmd_lightring', self.cmd_lightring_callback, sensor_qos)
 
         # --- Gazebo simulation-only topics (5) ---
         self.create_subscription(Contacts, '/bumper_contact', self.bumper_callback, 10)
@@ -119,6 +125,7 @@ class RosBridgeNode(Node):
         self.create_subscription(TransitionEvent, '/joint_state_broadcaster/transition_event', self.jsb_transition_callback, 10)
         self.create_subscription(TransitionEvent, '/diffdrive_controller/transition_event', self.diffdrive_transition_callback, 10)
 
+        # Publisher for movement commands
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
         # --- Action clients ---
@@ -131,7 +138,7 @@ class RosBridgeNode(Node):
         self.audio_client = ActionClient(self, AudioNoteSequence, '/audio_note_sequence')
         self.led_client = ActionClient(self, LedAnimation, '/led_animation')
 
-    # --- Create 3 robot sensors / status ---
+    # sensors callbacks
 
     def battery_callback(self, msg: BatteryState):
         update_sensor_state("/battery_state", enabled=True, value=f"{round(msg.percentage * 100, 1)}%")
@@ -201,6 +208,21 @@ class RosBridgeNode(Node):
             "/wheel_vels", enabled=True,
             value=f"L={msg.velocity_left:.2f}, R={msg.velocity_right:.2f}"
         )
+
+    def cmd_vel_callback(self, msg: Twist):
+        """Report the currently commanded velocity (what /cmd_vel is instructing the robot to do)."""
+        update_sensor_state(
+            "/cmd_vel", enabled=True,
+            value=f"linear={msg.linear.x:.2f}, angular={msg.angular.z:.2f}"
+        )
+
+    def cmd_audio_callback(self, msg: AudioNoteVector):
+        """Report the number of notes in the most recently commanded audio sequence."""
+        update_sensor_state("/cmd_audio", enabled=True, value=f"{len(msg.notes)} note(s)")
+
+    def cmd_lightring_callback(self, msg: LightringLeds):
+        """Report whether the current lightring command overrides the system default."""
+        update_sensor_state("/cmd_lightring", enabled=True, value=f"override_system={msg.override_system}")
 
     # --- Gazebo simulation-only topics ---
 
@@ -281,6 +303,12 @@ class RosBridgeNode(Node):
     # --- Movement control ---
 
     def publish_cmd_vel(self, key: str):
+        """
+        Convert a key string (e.g. "w") into a Twist velocity command and
+        publish it to /cmd_vel, making the robot actually move.
+        Called both by real-time keyboard input from React and by
+        recording playback.
+        """
         linear, angular = KEY_TO_TWIST.get(key, (0.0, 0.0))
         twist = Twist()
         twist.linear.x = linear
@@ -289,9 +317,11 @@ class RosBridgeNode(Node):
         self.get_logger().info(f"Published cmd_vel for key '{key}': linear={linear}, angular={angular}")
 
     # --- Action execution ---
+    # Actions are long-running robot behaviors (Dock, RotateAngle, etc.),
+    # distinct from simple topic publish/subscribe. Sending an action goal
+    # is a three-stage process: send -> server accepts/rejects -> final result.
 
     def send_action(self, action_name: str, params: dict):
-        self.get_logger().info(">>> USING set_message_fields VERSION <<<")
         """
         Send a goal to the specified action server.
         params is a dict already parsed from the JSON sent by React.
@@ -299,7 +329,7 @@ class RosBridgeNode(Node):
         (e.g. navigate_to_position's goal_pose, which must be a PoseStamped).
         """
         action_map = {
-            "dock": (self.dock_client, Dock.Goal),
+            "dock": (self.dock_client, Dock.Goal), 
             "undock": (self.undock_client, Undock.Goal),
             "rotate_angle": (self.rotate_angle_client, RotateAngle.Goal),
             "drive_distance": (self.drive_distance_client, DriveDistance.Goal),
@@ -349,6 +379,8 @@ class RosBridgeNode(Node):
         status = future.result().status
         self.get_logger().info(f"Action '{action_name}' finished with status={status}, result={result}")
 
+
+# RECORDING: save / load / play back key-press sequences
 RECORDINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings.json")
 
 
@@ -401,9 +433,10 @@ async def handle_recording_action(websocket, data, node):
 
         node.publish_cmd_vel("stop")
         node.get_logger().info(f"Finished playing recording '{name}'")
+
+# Holds the single RosBridgeNode instance once main() creates it, so other
+# functions (like handle_incoming_messages) can access it.       
 ros_node = None
-
-
 async def handle_incoming_messages(websocket):
     """
     Listen for incoming messages from a connected React client.
@@ -440,14 +473,13 @@ async def handle_incoming_messages(websocket):
     except Exception as e:
         print(f"Incoming message handler stopped: {e}")
 
+
 async def execute_terminal_command(websocket, command: str):
     """
-    Execute a shell command, matching the original Tkinter terminal.py
-    behavior: runs the raw command via the shell, streams stdout and
-    stderr back to the client as they arrive, tagging stderr lines as
-    errors so the frontend can style them differently.
-
-    Mirrors terminal.py's use of subprocess.Popen(shell=True, ...).
+    Execute an arbitrary shell command, matching the original Tkinter
+    terminal.py behavior exactly: runs the raw command via the shell,
+    streams stdout and stderr back to the client line by line as they
+    arrive, tagging stderr lines so the frontend can render them in red.
     """
     if command.strip().lower() == "clear":
         await websocket.send(json.dumps({"type": "terminal_clear"}))
@@ -486,8 +518,8 @@ async def execute_terminal_command(websocket, command: str):
     stdout_thread.join()
     stderr_thread.join()
 
-
 def start_ros_spin_thread(node):
+    """Runs rclpy.spin(node) in a background thread, so ROS 2 event processing doesn't block the WebSocket servers."""
     def spin():
         rclpy.spin(node)
     threading.Thread(target=spin, daemon=True).start()
