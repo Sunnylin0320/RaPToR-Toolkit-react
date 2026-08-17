@@ -434,6 +434,10 @@ async def handle_recording_action(websocket, data, node):
         node.publish_cmd_vel("stop")
         node.get_logger().info(f"Finished playing recording '{name}'")
 
+        # Notify the frontend that playback has completed, so it can
+        # clear the "Playing..." state on the button.
+        await websocket.send(json.dumps({"type": "playback_finished", "name": name}))
+
 # Holds the single RosBridgeNode instance once main() creates it, so other
 # functions (like handle_incoming_messages) can access it.       
 ros_node = None
