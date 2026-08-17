@@ -379,6 +379,16 @@ class RosBridgeNode(Node):
         status = future.result().status
         self.get_logger().info(f"Action '{action_name}' finished with status={status}, result={result}")
 
+        if control_event_loop is not None:
+            message = json.dumps({
+                "type": "action_finished",
+                "name": action_name,
+                "status": status,
+                "success": status == 4,
+            })
+            for client in list(control_clients):
+                asyncio.run_coroutine_threadsafe(client.send(message), control_event_loop)
+
 
 # RECORDING: save / load / play back key-press sequences
 RECORDINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings.json")
@@ -427,9 +437,22 @@ async def handle_recording_action(websocket, data, node):
         sequence = recordings[name]
         node.get_logger().info(f"Playing recording '{name}' ({len(sequence)} steps)")
 
-        for key, duration in sequence:
-            node.publish_cmd_vel(key)
-            await asyncio.sleep(duration)
+        for event in sequence:
+            event_type = event.get("type") if isinstance(event, dict) else None
+
+            if event_type == "action":
+                node.send_action(event["name"], {})
+            elif event_type == "key":
+                node.publish_cmd_vel(event["key"])
+            else:
+                # Backward compatibility: recordings saved before action
+                # events were supported store each entry as a plain
+                # [key, duration] pair instead of a dict.
+                key, _ = event
+                node.publish_cmd_vel(key)
+
+            delay = event.get("delay", 0) if isinstance(event, dict) else event[1]
+            await asyncio.sleep(delay)
 
         node.publish_cmd_vel("stop")
         node.get_logger().info(f"Finished playing recording '{name}'")
@@ -437,10 +460,11 @@ async def handle_recording_action(websocket, data, node):
         # Notify the frontend that playback has completed, so it can
         # clear the "Playing..." state on the button.
         await websocket.send(json.dumps({"type": "playback_finished", "name": name}))
-
 # Holds the single RosBridgeNode instance once main() creates it, so other
 # functions (like handle_incoming_messages) can access it.       
 ros_node = None
+control_event_loop = None
+control_clients = set()
 async def handle_incoming_messages(websocket):
     """
     Listen for incoming messages from a connected React client.
@@ -540,7 +564,11 @@ def main():
 
     async def control_handler(websocket):
         print(f"Control client connected: {websocket.remote_address}")
-        await handle_incoming_messages(websocket)
+        control_clients.add(websocket)
+        try:
+            await handle_incoming_messages(websocket)
+        finally:
+            control_clients.discard(websocket)
 
     async def start_control_server():
         import websockets
@@ -549,7 +577,9 @@ def main():
             await asyncio.Future()
 
     def run_control_server():
+        global control_event_loop
         loop = asyncio.new_event_loop()
+        control_event_loop = loop
         asyncio.set_event_loop(loop)
         loop.run_until_complete(start_control_server())
 
