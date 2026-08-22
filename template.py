@@ -4,7 +4,6 @@ import threading
 import json
 import websockets
 import subprocess
-import time
 
 # --- Global Variables ---
 sensor_values = {}
@@ -18,12 +17,30 @@ def get_battery_state():
             return None
         return sensor_values.get('/battery_state')
 
-def get_cliff_intensity():
+
+def get_bumper_contact():
     with sensor_lock:
-        value = sensor_values.get('/cliff_intensity')
+        value = sensor_values.get('/bumper_contact')
         if value is None or value == '':
             return None
-        return sensor_values.get('/cliff_intensity')
+        return sensor_values.get('/bumper_contact')
+
+
+def get_clicked_point():
+    with sensor_lock:
+        value = sensor_values.get('/clicked_point')
+        if value is None or value == '':
+            return None
+        return sensor_values.get('/clicked_point')
+
+
+def get_clock():
+    with sensor_lock:
+        value = sensor_values.get('/clock')
+        if value is None or value == '':
+            return None
+        return sensor_values.get('/clock')
+
 
 def get_cmd_audio():
     with sensor_lock:
@@ -32,12 +49,14 @@ def get_cmd_audio():
             return None
         return sensor_values.get('/cmd_audio')
 
+
 def get_cmd_lightring():
     with sensor_lock:
         value = sensor_values.get('/cmd_lightring')
         if value is None or value == '':
             return None
         return sensor_values.get('/cmd_lightring')
+
 
 def get_cmd_vel():
     with sensor_lock:
@@ -46,13 +65,47 @@ def get_cmd_vel():
             return None
         return sensor_values.get('/cmd_vel')
 
+
+def get_diffdrive_controller_cmd_vel_unstamped():
+    with sensor_lock:
+        value = sensor_values.get('/diffdrive_controller/cmd_vel_unstamped')
+        if value is None or value == '':
+            return None
+        return sensor_values.get('/diffdrive_controller/cmd_vel_unstamped')
+
+
+def get_diffdrive_controller_transition_event():
+    with sensor_lock:
+        value = sensor_values.get('/diffdrive_controller/transition_event')
+        if value is None or value == '':
+            return None
+        return sensor_values.get('/diffdrive_controller/transition_event')
+
+
 def get_dock_status():
     with sensor_lock:
         value = sensor_values.get('/dock_status')
         if value is None or value == '':
             return None
         return sensor_values.get('/dock_status')
-    
+
+
+def get_dynamic_joint_states():
+    with sensor_lock:
+        value = sensor_values.get('/dynamic_joint_states')
+        if value is None or value == '':
+            return None
+        return sensor_values.get('/dynamic_joint_states')
+
+
+def get_goal_pose():
+    with sensor_lock:
+        value = sensor_values.get('/goal_pose')
+        if value is None or value == '':
+            return None
+        return sensor_values.get('/goal_pose')
+
+
 def get_hazard_detection():
     with sensor_lock:
         value = sensor_values.get('/hazard_detection')
@@ -60,12 +113,14 @@ def get_hazard_detection():
             return None
         return sensor_values.get('/hazard_detection')
 
-def get_imu():
+
+def get_initialpose():
     with sensor_lock:
-        value = sensor_values.get('/imu')
+        value = sensor_values.get('/initialpose')
         if value is None or value == '':
             return None
-        return sensor_values.get('/imu')
+        return sensor_values.get('/initialpose')
+
 
 def get_interface_buttons():
     with sensor_lock:
@@ -74,12 +129,14 @@ def get_interface_buttons():
             return None
         return sensor_values.get('/interface_buttons')
 
+
 def get_ir_intensity():
     with sensor_lock:
         value = sensor_values.get('/ir_intensity')
         if value is None or value == '':
             return None
         return sensor_values.get('/ir_intensity')
+
 
 def get_ir_opcode():
     with sensor_lock:
@@ -88,19 +145,30 @@ def get_ir_opcode():
             return None
         return sensor_values.get('/ir_opcode')
 
+
+def get_joint_state_broadcaster_transition_event():
+    with sensor_lock:
+        value = sensor_values.get('/joint_state_broadcaster/transition_event')
+        if value is None or value == '':
+            return None
+        return sensor_values.get('/joint_state_broadcaster/transition_event')
+
+
+def get_joint_states():
+    with sensor_lock:
+        value = sensor_values.get('/joint_states')
+        if value is None or value == '':
+            return None
+        return sensor_values.get('/joint_states')
+
+
 def get_kidnap_status():
     with sensor_lock:
         value = sensor_values.get('/kidnap_status')
         if value is None or value == '':
             return None
         return sensor_values.get('/kidnap_status')
-    
-def get_mobility_monitor_transition_event():
-    with sensor_lock:
-        value = sensor_values.get('/mobility_monitor/transition_event')
-        if value is None or value == '':
-            return None
-        return sensor_values.get('/mobility_monitor/transition_event')
+
 
 def get_mouse():
     with sensor_lock:
@@ -109,12 +177,14 @@ def get_mouse():
             return None
         return sensor_values.get('/mouse')
 
+
 def get_odom():
     with sensor_lock:
         value = sensor_values.get('/odom')
         if value is None or value == '':
             return None
         return sensor_values.get('/odom')
+
 
 def get_parameter_events():
     with sensor_lock:
@@ -123,12 +193,14 @@ def get_parameter_events():
             return None
         return sensor_values.get('/parameter_events')
 
-def get_robot_state_transition_event():
+
+def get_robot_description():
     with sensor_lock:
-        value = sensor_values.get('/robot_state/transition_event')
+        value = sensor_values.get('/robot_description')
         if value is None or value == '':
             return None
-        return sensor_values.get('/robot_state/transition_event')
+        return sensor_values.get('/robot_description')
+
 
 def get_rosout():
     with sensor_lock:
@@ -137,6 +209,23 @@ def get_rosout():
             return None
         return sensor_values.get('/rosout')
 
+
+def get_sim_ground_truth_dock_pose():
+    with sensor_lock:
+        value = sensor_values.get('/sim_ground_truth_dock_pose')
+        if value is None or value == '':
+            return None
+        return sensor_values.get('/sim_ground_truth_dock_pose')
+
+
+def get_sim_ground_truth_pose():
+    with sensor_lock:
+        value = sensor_values.get('/sim_ground_truth_pose')
+        if value is None or value == '':
+            return None
+        return sensor_values.get('/sim_ground_truth_pose')
+
+
 def get_slip_status():
     with sensor_lock:
         value = sensor_values.get('/slip_status')
@@ -144,12 +233,14 @@ def get_slip_status():
             return None
         return sensor_values.get('/slip_status')
 
-def get_static_transform_transition_event():
+
+def get_standard_dock_description():
     with sensor_lock:
-        value = sensor_values.get('/static_transform/transition_event')
+        value = sensor_values.get('/standard_dock_description')
         if value is None or value == '':
             return None
-        return sensor_values.get('/static_transform/transition_event')
+        return sensor_values.get('/standard_dock_description')
+
 
 def get_stop_status():
     with sensor_lock:
@@ -158,12 +249,14 @@ def get_stop_status():
             return None
         return sensor_values.get('/stop_status')
 
+
 def get_tf():
     with sensor_lock:
         value = sensor_values.get('/tf')
         if value is None or value == '':
             return None
         return sensor_values.get('/tf')
+
 
 def get_tf_static():
     with sensor_lock:
@@ -172,6 +265,7 @@ def get_tf_static():
             return None
         return sensor_values.get('/tf_static')
 
+
 def get_wheel_status():
     with sensor_lock:
         value = sensor_values.get('/wheel_status')
@@ -179,12 +273,14 @@ def get_wheel_status():
             return None
         return sensor_values.get('/wheel_status')
 
+
 def get_wheel_ticks():
     with sensor_lock:
         value = sensor_values.get('/wheel_ticks')
         if value is None or value == '':
             return None
         return sensor_values.get('/wheel_ticks')
+
 
 def get_wheel_vels():
     with sensor_lock:
@@ -226,17 +322,13 @@ def send_wall_follow(param=None):
 def start_ws_listener():
     """
     Start a WebSocket listener in a separate thread.
-    This function connects to a WebSocket server and updates the sensor values.
+    This function connects to the WebSocket server and updates the sensor values.
     """
-    print("Starting WebSocket listener...")
     async def listen():
-        print("Connecting to WebSocket server...")
         uri = 'ws://localhost:6789'
         async with websockets.connect(uri) as websocket:
-            print(f"Connected to {uri}")
             while True:
                 message = await websocket.recv()
-                print(message)
                 data = json.loads(message)
                 with sensor_lock:
                     sensor_values.update(data)
@@ -275,19 +367,19 @@ def _send_action(name, path, param):
     if process.returncode != 0:
         print("Error:", process.stderr.read())
 
+
 if __name__ == '__main__':
-    # Start the background listener
+    # Starting background threads
     start_ws_listener()
 
     # Example usage of sensor getters
     # You can replace this with your own code
-    print('Waiting for sensor data...')
-    for _ in range(10):
-        val = get_battery_state()
-        if val is not None:
-            print('Battery State:', val)
-            break
-        time.sleep(1)
-    else:
-        print('Battery state not received within timeout.')
-
+    # print('Waiting for sensor data...')
+    # for _ in range(10):
+    #    val = get_battery_state()
+    #    if val is not None:
+    #        print('Battery State:', val)
+    #        break
+    #    time.sleep(1)
+    # else:
+    #    print('Battery state not received within timeout.')

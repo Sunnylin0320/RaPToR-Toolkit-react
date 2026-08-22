@@ -441,7 +441,7 @@ async def handle_recording_action(websocket, data, node):
             event_type = event.get("type") if isinstance(event, dict) else None
 
             if event_type == "action":
-                node.send_action(event["name"], {})
+                node.send_action(event["name"], event.get("params", {}))
             elif event_type == "key":
                 node.publish_cmd_vel(event["key"])
             else:
