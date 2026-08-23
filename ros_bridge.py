@@ -69,6 +69,11 @@ KEY_TO_TWIST = {
     "stop": (0.0, 0.0),
 }
 
+WORLD_SPAWN_COORDS = {
+    "depot": (0.0, 0.0),
+    "maze": (2.0, 1.0),
+}
+
 
 class RosBridgeNode(Node):
     def __init__(self):
@@ -80,7 +85,7 @@ class RosBridgeNode(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
 
-        # --- Create 3 robot sensors / status (14) ---
+        # --- Create 3 robot sensors / status (14) ---f
         self.create_subscription(BatteryState, '/battery_state', self.battery_callback, 10)
         self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
         self.create_subscription(HazardDetectionVector, '/hazard_detection', self.hazard_callback, 10)
@@ -390,7 +395,28 @@ class RosBridgeNode(Node):
                 asyncio.run_coroutine_threadsafe(client.send(message), control_event_loop)
 
 
-# RECORDING: save / load / play back key-press sequences
+def switch_scene(world_name, websocket, loop):
+    """
+    Restarts Gazebo with a different world, using the reliable startup
+    script (which handles the controller-activation race condition).
+    Runs in a background thread since the script takes 1-2 minutes.
+    Does NOT kill ros_bridge.py itself — only Gazebo-related processes.
+    """
+    x, y = WORLD_SPAWN_COORDS.get(world_name, (0.0, 0.0))
+
+    def run():
+        subprocess.run(["pkill", "-9", "-f", "ign"])
+        subprocess.run(["pkill", "-9", "-f", "gz"])
+
+        script_path = os.path.expanduser("~/start_gazebo_reliable.sh")
+        subprocess.Popen([script_path, world_name, str(x), str(y)])
+
+        message = json.dumps({"type": "scene_switch_started", "world": world_name})
+        asyncio.run_coroutine_threadsafe(websocket.send(message), loop)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 RECORDINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings.json")
 
 
@@ -495,6 +521,9 @@ async def handle_incoming_messages(websocket):
                         asyncio.create_task(execute_terminal_command(websocket, command))
                 elif "recording_action" in data:
                     await handle_recording_action(websocket, data, ros_node)
+                elif "switch_scene" in data:
+                    world_name = data.get("world_name", "depot")
+                    switch_scene(world_name, websocket, control_event_loop)
 
             except json.JSONDecodeError:
                 print(f"Received non-JSON message: {message}")
